@@ -1,0 +1,225 @@
+Option Explicit
+
+'#include "ST74_XML.avb"
+'#include "ST74_FileDlg.avb"
+'#include "ST74_AssistantLog.avb"
+
+Const XML_EXPORT_FILE_NAME = "ST74_ExpImpTml.xml"
+
+Dim aOps(), i
+
+With Workarea.site.selected
+	ReDim aOps(.Count - 1)
+
+	For i = 1 To .Count
+		Set aOps(i - 1) = .Item(i)
+	Next
+End With
+
+
+'ST74_Uniimport Array("", Array(), True)
+
+'ST74_UniExport Array("medoc_exp_xml", aOps, False)
+ST74_UniImport Array("medoc_exp_xml", Array(), False)
+
+'---
+'
+'---
+Function SelectTemplate(NodeRoot, Mode, oLog)
+	Dim Dlg, DocCode
+
+	DocCode = ""
+	Set Dlg = App.CreateDialog("ST74_SelectImpExpTemplate.adg")
+	Set Dlg.Map.Item("NodeRoot") = NodeRoot
+
+	If Dlg.DoModal = vbOK Then DocCode = Dlg.Map("DocCode")
+
+	If DocCode <> "" Then
+		oLog.writelog LOG_MSG_INFORMATION, Array("Не выбран тип документа для",  iif(mode, "импорта", "экспорта")), 0, 0
+	End If
+End Function
+'---
+'
+'---
+Sub ST74_UniExport(aPrm)
+	Dim DocCode, aOps, Dlg, Flag
+	Dim oXml, NodeRoot, NodeRules
+	Dim aPrmOp, ProcName, ModuleName, oLog
+	Dim IsPack
+
+	Set oLog = New HTMLog
+	Set oXml = New XML
+
+	If oXml.Create() Then
+		oXml.FileName = XML_EXPORT_FILE_NAME
+
+		If oXml.Load() Then
+			DocCode = aPrm(0)
+			aOps = aPrm(1)
+
+			Set NodeRoot = oXml.xml.selectnodes("/impexp/exports").item(0)
+
+			' если не указан код документа, то спрашиваем пользователя
+			If DocCode = "" Then DocCode = SelectTemplate(NodeRoot, False, oLog)
+			If DocCode = "" Then Exit Sub
+
+			Set NodeRules = NodeRoot.getElementsByTagName(DocCode).item(0)
+			ModuleName = checknull(NodeRules.GetAttribute("module"), "")
+			ProcName = checknull(NodeRules.GetAttribute("proc"), "")
+			IsPack = LCase(checknull(NodeRules.GetAttribute("pack"), "true")) = "true"
+
+			If ModuleName <> "" Then
+				DoExport aOps, NodeRules, ModuleName, ProcName, oLog, IsPack, DocCode
+			Else
+				oLog.writelog LOG_MSG_ERROR, Array("Модуль обработки не указан", oXML.ErrorMsg), 0, 0				
+			End If
+
+		Else
+			oLog.writelog LOG_MSG_ERROR, Array("Ошибка загрузки файла шаблонов", oXML.ErrorMsg), 0, 0				
+		End If
+	Else
+		oLog.writelog LOG_MSG_ERROR, Array("Ошибка создания XML", oXML.ErrorMsg), 0, 0				
+	End If
+
+End Sub	
+'---
+'
+'---
+Sub DoExport(aOps, NodeRules, ModuleName, ProcName, oLog, IsPack, DocCode)
+	Dim i, aPrmOp
+
+	If IsFileExists(ModuleName) Then
+		If IsPack Then
+			aPrmOp = Array(aOps, NodeRules, False, oLog, DocCode)
+			App.RunModule ModuleName, ProcName,aPrmOp
+
+			If Not aPrmOp(2) Then
+				oLog.writelog LOG_MSG_ERROR, Array("Ошибка экспорта документа(ов)"), 0, 0	
+			End If
+		Else
+			For i = 0 To UBound(aOps)
+				aPrmOp = Array(aOps(i), NodeRules, False, oLog, DocCode)
+				App.RunModule ModuleName, ProcName,aPrmOp
+	
+				If Not aPrmOp(2) Then
+					oLog.writelog LOG_MSG_ERROR, Array("Ошибка экспорта документа(ов)"), 0, 0	
+					Exit For
+				End If
+			Next
+		End If
+	Else
+		oLog.writelog LOG_MSG_ERROR, Array("Модуль обработки не найден(", ModuleName, ")"), 0, 0	
+	End If
+End Sub
+'---
+'
+'---
+Sub DoImport(Tag, aFiles, NodeRules, ModuleName, ProcName, oLog)
+	Dim i, aPrm
+
+	For i = 0 To UBound(aFiles)
+		If aFiles(i) <> "" Then
+			aPrm = Array(aFiles(i), NodeRules, False, oLog, Tag)
+
+			If IsFileExists(ModuleName) Then
+				App.RunModule ModuleName, ProcName, aPrm
+
+'			If Not aPrm(2) Then
+'				oLog.writelog LOG_MSG_ERROR, Array("Ошибка импорта документа(ов)", aFiles(i)), 0, 0	
+'			End If
+			Else
+				oLog.writelog LOG_MSG_ERROR, Array("Модуль обработки не найден(", ModuleName, ")"), 0, 0	
+			End If
+
+		End If
+	Next
+End Sub
+'---
+'
+'---
+Sub ST74_UniImport(aPrm)
+	Dim DocCode
+	Dim oXml, NodeRoot, NodeRules
+	Dim ProcName, ModuleName, aFiles
+	Dim Ext, ExtDescr, aPrmOp, oLog, Tag
+
+	Set oLog = New HTMLog
+	Set oXml = New XML
+
+	If oXml.Create() Then
+		oXml.FileName = XML_EXPORT_FILE_NAME
+
+		If oXml.Load() Then
+			DocCode = aPrm(0)
+
+			Set NodeRoot = oXml.xml.selectnodes("/impexp/imports").item(0)
+
+			' если не указан код документа, то ищем в шаблонах
+			If DocCode = "" Then DocCode = SelectTemplate(NodeRoot, True, oLog)
+			If DocCode = "" Then 
+				oLog.writelog LOG_MSG_WARNING, Array("Не выбран тип документа для импорта"), 0, 0	
+				Exit Sub
+			End If
+
+			Set NodeRules = NodeRoot.getElementsByTagName(DocCode).item(0)
+			ModuleName = checknull(NodeRules.GetAttribute("module"), "")
+			ProcName = checknull(NodeRules.GetAttribute("proc"), "")
+			Ext = checknull(NodeRules.GetAttribute("type"), "")
+			ExtDescr = checknull(NodeRules.GetAttribute("type_descr"), "")
+			Tag = checknull(NodeRules.GetAttribute("tag"), "")
+
+			If ModuleName <> "" Then
+				GetFilesToImport aFiles, Ext, ExtDescr, checknull(NodeRules.GetAttribute("browsefile"), "multifiles")
+
+				If UBound(aFiles) > -1 Then
+					DoImport Tag, aFiles, NodeRules, ModuleName, ProcName, oLog
+				Else
+					oLog.writelog LOG_MSG_INFORMATION, Array("Файлы не найдены", oXML.ErrorMsg), 0, 0				
+				End If
+			Else
+				oLog.writelog LOG_MSG_ERROR, Array("Модуль обработки не указан", oXML.ErrorMsg), 0, 0								
+			End If
+
+		Else
+			oLog.writelog LOG_MSG_ERROR, Array("Ошибка загрузки файла шаблонов", oXML.ErrorMsg), 0, 0				
+		End If
+	Else
+		oLog.writelog LOG_MSG_ERROR, Array("Ошибка создания XML", oXML.ErrorMsg), 0, 0				
+	End If
+
+End Sub	
+'---
+'
+'---
+Const FILE_BROWSE_CAPTION = "Выберите файл(ы)"
+Const FOLDER_BROWSE_CAPTION = "Выберите папку с файлами"
+
+Sub GetFilesToImport(aFiles, Ext, ExtDescr, Mode)
+	Dim RD, aPath, DefPath, i, FilePath
+
+	Set RD = CreateLibObject("Redirect")
+	aPath = RD.GetPathArray("*." & Ext)
+
+	If UBound(aPath) = -1 Then
+		oLog.writelog LOG_MSG_WARNING, Array("Внимание ! Для файлов с расширением *.", Ext, "не указаны пути расположения."), 0, 0
+		DefPath = ""
+	Else
+		DefPath = aPath(0)
+	End If
+
+	Select Case Mode
+		Case "multifiles"
+			OpenFileReadMulti aFiles, DefPath, "*." & Ext, ExtDescr, FILE_BROWSE_CAPTION
+		Case "byfolders"
+			OpenFileReadFolder aFiles, Ext, 0, FOLDER_BROWSE_CAPTION
+		Case "onefile"
+			If OpenFileRead(FilePath, DefPath, Ext, ExtDescr, FILE_BROWSE_CAPTION) Then
+				aFiles = Array(FilePath)
+			Else
+				aFiles = Array()
+			End If
+	End Select
+End Sub
+'---
+'
+'---

@@ -1,0 +1,76 @@
+Option Explicit
+'#include "ST74_XML.avb"
+
+Const MSG_BOX_CAPTION = "Загрузка ресурсов"
+
+ST74_LoadResources
+
+Sub ST74_LoadResources
+	Dim oXml, LangUI
+
+	Set oXml = New XML
+	oXml.xmlFileName = "ST74_Resource.xml"
+
+	If oXml.Load() Then
+		LangUI = App.LangUI
+		If Not LoadBtnRes(oXml.GetTag("/st74/formtoolbar"), LangUI) Then
+			MsgBox "Ошибка загрузки ресуров для кнопок тулбара форм", vbCritical, MSG_BOX_CAPTION
+		End If
+
+		If Not LoadMsgRes(oXml.GetTag("/st74/msgtext"), LangUI) Then
+			MsgBox "Ошибка загрузки ресуров для текста", vbCritical, MSG_BOX_CAPTION
+		End If
+	Else
+		MsgBox oXml.ErrorMsg, vbCritical, MSG_BOX_CAPTION
+	End If
+	
+End Sub
+
+Function LoadBtnRes(xmlNode, LangUI)
+	Dim i, btn, frmbtns, NodeRoot
+
+	LoadBtnRes = True
+	Set frmbtns = CreateLibObject("map")
+
+	If Not IsEmpty(xmlNode) Then
+		Set NodeRoot = xmlNode.Item(0).ChildNodes
+		For i = 0 To NodeRoot.Length - 1
+			With NodeRoot.Item(i)	
+				Set btn = CreateLibObject("map")
+
+				btn("caption") = .GetAttribute("caption_" & LangUI)
+				btn("popup") = .GetAttribute("popup_" & LangUI)
+				btn("tooltip") = .GetAttribute("tooltip_" & LangUI)
+
+				Set frmbtns(.GetAttribute("id")) = btn
+			End With
+		Next
+	Else
+		LoadBtnRes = False
+	End If
+
+	Set workarea.map.item("frmbtns") = frmbtns
+
+End Function 
+
+Function LoadMsgRes(xmlNode, LangUI)
+	Dim i, msgs, NodeRoot
+
+	Set msgs = CreateLibObject("map")
+
+	If Not IsEmpty(xmlNode) Then
+		LoadMsgRes = True
+		Set NodeRoot = xmlNode.Item(0).ChildNodes
+
+		For i = 0 To NodeRoot.Length - 1
+			With NodeRoot.Item(i)	
+				msgs(.getattribute("id")) = .GetAttribute("text_" & LangUI)
+			End With
+		Next
+	Else
+		LoadMsgRes = False
+	End If
+
+	Set workarea.map.item("msgs") = msgs
+
+End Function 

@@ -1,0 +1,352 @@
+Option Explicit
+
+Class tax_common_class
+
+	Public MiscTaxRateNo, AgreeMscNo, ErrorMsg, MyCo, ClassMap, MiscTaxLgtNo, MiscTaxReasonCorrNo, MiscTaxReasonNo
+
+	'---
+	'
+	'---
+	Private Sub Class_initialize
+		Set ClassMap = CreateLibObject("Map")
+		Set MyCo = Workarea.MyCompany
+
+		MiscTaxRateNo = com_GetMscNoByMscID(com_getparamvalue(workarea, "Ставка НДС", 0))
+		MiscTaxLgtNo = com_GetMscNoByMscID(com_getparamvalue(workarea, "Коды льгот для НН", 0))
+		AgreeMscNo = com_GetMscNoByMscID(com_getparamvalue(workarea, "Договора", 0))
+		MiscTaxReasonCorrNo = com_GetMscNoByMscID(com_getparamvalue(workarea, "Коды причин исправлений НН", 0))
+		MiscTaxReasonNo = com_GetMscNoByMscID(com_getparamvalue(workarea, "Типы причин для НН", 0))
+		ErrorMsg = ""
+
+		GetTaxDeptCodes
+
+	End Sub
+	'---
+	'
+	'---
+	Public Sub SetMyCo(Ag)
+		If Not Ag Is Nothing Then
+			Set MyCo = Ag
+			GetTaxDeptCodes
+		End If
+	End Sub
+	'---
+	'
+	'---
+	Public Function ResultFileName(xml)
+		Dim XMLFileName
+
+		XMLFileName = GetTagValue(xml, "/DECLAR/DECLARHEAD/C_REG", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_RAJ", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/TIN", 10)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC", 3)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC_SUB", 3)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC_VER", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC_STAN", 1)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC_TYPE", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_DOC_CNT", 7)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/PERIOD_TYPE", 1)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/PERIOD_MONTH", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/PERIOD_YEAR", 4)
+		'XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_REG", 2)
+		XMLFileName = XMLFileName & GetTagValue(xml, "/DECLAR/DECLARHEAD/C_STI_ORIG", 4)
+
+		ResultFileName = CharReplace(XMLFileName, "*/\?", "0") & ".xml"
+		
+	End Function
+	'---
+	'
+	'---
+	Private Function CharReplace(StrReplace, StrFind, StrReplaceTo)
+		Dim i
+
+		For i = 1 To Len(StrReplace)
+			StrReplace = Replace(StrReplace, CharAt(StrFind, i), StrReplaceTo)
+		Next
+
+		CharReplace = StrReplace
+	End Function
+	'---
+	'
+	'---
+	Public Function unittag(Tr)
+		If Tr.UnitID <> 0 Then
+			unittag = Left(Tr.Unit.Tag, 4)
+		Else
+			unittag = ""
+		End If
+	End Function
+	'---
+	'
+	'---
+	Public Function GetFactValue(Elem, fName, fDate, DefValue)
+		If Elem.Facts.Exists(fName) Then
+			GetFactValue = Elem.Facts(fDate).Item(fName).Value2
+		Else
+			GetFactValue = DefValue
+		End If
+	End Function
+	'---
+	'
+	'---
+	Public Function GetTagValue(xml, TagPath, TagLen)
+		Dim TagValue
+	
+		TagValue = Left(xml.documentElement.selectNodes(TagPath).item(0).text, TagLen)
+		GetTagValue = String(TagLen - Len(TagValue), "0") & TagValue
+	End Function
+	'---
+	'
+	'---
+	Private Sub GetTaxDeptCodes
+		Dim Ag, AgID, aData, Codes
+
+		ErrorMsg = ""
+		ClassMap.RemoveAll
+
+		If MyCo.Params.exists("Налоговая инспекция") Then
+			AgID = MyCo.Params.Item("Налоговая инспекция").Value2
+
+			If AgID <> 0 Then
+				Set Ag = workarea.agent(AgID)
+
+				If Not Ag Is Nothing Then
+					If Ag.Params.exists("Коды ГНИ") Then
+						Codes = Ag.Params("Коды ГНИ").Value2
+						aData = Split(Codes, "/")
+
+						If UBound(aData) = 3 Then
+							ClassMap("C_REG") = aData(0)
+							ClassMap("C_RAJ") = aData(1)
+							ClassMap("C_STI") = aData(2)
+							ClassMap("T_STI") = aData(3)
+							ClassMap("C_STI_ORIG") = CLng(aData(0)) * 100 + CLng(aData(1))
+						Else
+							ErrorMsg = "Укажите 'Коды ГНИ' в свойствах " & MyCo.Name
+						End If
+					Else
+						ErrorMsg = "У корреспондента " & Ag.Name & " отсутствует параметр 'Коды ГНИ'"
+					End If
+				Else
+					ErrorMsg = "В параметра корреспондента " & MyCo.Name & " не указана налоговая инспекция"
+				End If
+			Else
+				ErrorMsg = "В параметра корреспондента " & MyCo.Name & " не указана налоговая инспекция"
+			End If
+		Else
+			ErrorMsg = "У корреспондента " & MyCo.Name & " отсутствует параметр 'Налоговая инспекция'"
+		End If
+
+	End Sub
+	'---
+	'
+	'---
+	Public Function DGDate(OnDate)
+		If IsDate(OnDate) Then
+			DGDate = Replace(Formatdate2(OnDate, "dd mm yyyy"), " ", "")
+			ErrorMsg = ""
+		Else
+			DGDate = ""
+			ErrorMsg = "Ошибка преобразования '" & OnDate & "' в дату"
+		End If
+	End Function
+	'---
+	'
+	'---
+	Public Function EntName(Tr)
+		Dim NewEntName
+
+		NewEntName = GetParamStringValue(Tr.EntBind, "Полное наименование", Tr.EntBind.Name)
+		EntName =  NewEntName & " " & Tr.Params("Примечание").Value2
+
+	End Function
+	'---
+	'
+	'---
+	Public Function unit(Tr)
+		If Tr.EntID <> 0 Then
+			If Tr.Entity.Type = 1002 Then
+				unit = "послуга"
+			Else
+				unit = Tr.UnitBind.Name
+			End If
+		End If
+	End Function
+	'---
+	'
+	'---
+	Public Function gettaxsum(Tr, Mode)
+		Dim TrLong1, Sum
+
+		Sum = 0
+		TrLong1 = Tr.MiscBind(MiscTaxRateNo).Long1
+
+		If Mode = 1 Then
+			If TrLong1 <= Mode Then
+				Sum = Tr.sum
+			End If
+		ElseIf Tr.MiscBind(MiscTaxRateNo).Long1 = Mode Then
+			Sum = Tr.sum
+		End If
+		
+		gettaxsum = Sum
+
+	End Function
+	'---
+	'
+	'---
+	Public Function DGdecimal(num, declen)
+		DGdecimal = Replace(FormatNumber(num, declen,,,0), ",", ".")
+	End Function
+	'---
+	'
+	'---
+	Public Function DGdecimal_P(num, declen)
+		If num > 0 Then
+			DGdecimal_P = DGdecimal(num, declen)
+		Else
+			DGdecimal_P = ""
+		End If
+	End Function
+	'---
+	'
+	'---
+	Public Function GetTaxValue(MscBind, OnDate)
+		Dim Tax
+
+		Tax = CheckNull(MscBind.FactValue("Ставка НДС", OnDate), 0)
+		If Tax = vbEmpty Then Tax = 0
+
+		GetTaxValue = Tax
+	End Function
+	'---
+	'
+	'---
+	Public Function GetParamStringValue(ElemBind, prmName, DefValue)
+		Dim ElemParamValue
+
+		ElemParamValue	 = ElemBind.ParamString(prmName)
+		If ElemParamValue = "" Then ElemParamValue = DefValue
+
+		GetParamStringValue = ElemParamValue 
+	End Function
+	'---
+	'
+	'---
+	Public Function GetAddress(Address)
+		Dim Str1, Str2, Str3 
+
+		Str1 = Token (Address,1,";")	
+		Str2 = Token (Address,2,";") 
+		Str3 = Token (Address,3,";")
+
+		GetAddress = IIF(Len(Str3) > 0, Str3 & "; ", "") + IIF(Len(Str2) > 0, Str2 & "; ", "") + Str1
+	End Function
+	'---
+	'
+	'---
+	Public Property Get TIN
+		TIN = MyCo.Code
+	End Property
+	'---
+	'
+	'---
+	Public Property Get C_DOC_CNT
+	End Property
+	'---
+	'
+	'---
+	Public Property Get C_REG 
+		C_REG = ClassMap("C_REG")
+	End Property
+	'---
+	'
+	'---
+	Public Property Get C_RAJ 
+		C_RAJ = ClassMap("C_RAJ")
+	End Property
+	'---
+	'
+	'---
+	Public Property Get PERIOD_MONTH
+		PERIOD_MONTH = Month(Date)
+	End Property
+	'---
+	'
+	'---
+	Public Property Get PERIOD_TYPE 
+		PERIOD_TYPE = "1"
+	End Property
+	'---
+	'
+	'---
+	Public Property Get PERIOD_YEAR 
+		PERIOD_YEAR = Year(Date)
+	End Property
+	'---
+	'
+	'---
+	Public Property Get C_STI_ORIG
+		C_STI_ORIG = ClassMap("C_STI_ORIG")
+	End Property
+	'---
+	'
+	'---
+	Public Property Get D_FILL
+		D_FILL = DGDate(Date)
+	End Property
+	'---
+	'
+	'---
+	Public Property Get SOFTWARE
+		SOFTWARE = "Акцент " & App.Version & "(" & App.AppType & ") " 
+		SOFTWARE = SOFTWARE & workarea.userparam("CONFIG_NAME1") & " " & workarea.userparam("CONFIG_VERSION1")
+	End Property
+	'---
+	'
+	'---
+	Public Function checkmask(IntValue, BitNo)
+		checkmask = ((IntValue \ 100 And BitNo) <> 0)
+	End Function
+	'---
+	'
+	'---
+	Public Sub LoadMap(ExMap)
+		Dim key, Keys
+
+		keys = ExMap.Keys
+
+		For Each key In keys
+			Classmap(key) = ExMap(key)
+		Next
+	End Sub
+	'---------
+	'
+	'---------
+	Public Function GetFullNameTax(Ag)
+		Dim IsAgTax
+	
+		If Not Ag Is Nothing Then
+			IsAgTax = Ag.Params("Плательщик НДС").Value2
+	
+			If IsAgTax <> 0 Then
+				If UCase(workarea.enum("Логика").ItemNAmeID(IsAgTax)) = "НЕТ" Then
+					GetFullNameTax = "Неплатник"
+					Exit Function
+				End If
+			End If
+	
+			With Ag.Params("Полное наименование")
+				If .Value2 <> "" Then
+					GetFullNameTax = Ag.Params("Полное наименование").Value2
+				Else
+					GetFullNameTax = Ag.Name
+				End If
+			End With
+		Else
+			GetFullNameTax = ""
+		End If
+	End Function
+
+
+End Class

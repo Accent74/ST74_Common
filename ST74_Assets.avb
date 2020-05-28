@@ -1,0 +1,28 @@
+Option Explicit
+
+' Определение текущего местоположения ОС
+
+Sub FoundAg (AssetID, AccID, AgID)
+	Dim RW, i, n, m
+	AgID = 0
+
+	Set RW = WorkArea.CreateReport("RepWizard")
+	RW.KindID = AssetID
+	RW.AccID = AccID
+	RW.SetRemMode False, 0
+	RW.SetRemMode True, 1
+	RW.SetTurnMode False, 0
+	RW.SetTurnMode True, 0
+	RW.AddColumn 5
+	RW.AddColumn 3
+
+	If RW.Build Then
+		'RW.MakeSheet
+		For i = 1 To RW.Root.Children
+			If RW.Root.Child(i).Value = AssetID Then
+				n = RW.Root.Child(i).Children
+				AgID = RW.Root.Child(i).Child(n).Value
+			End If
+		Next
+	End If
+End Sub

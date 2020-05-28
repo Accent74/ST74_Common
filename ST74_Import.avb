@@ -1,0 +1,230 @@
+Option Explicit
+'---
+'
+'---
+Function imp_MakeString(ByVal VarStr)
+
+	VarStr = Replace(VarStr, "'", "''")
+	VarStr = Replace(VarStr, Chr(34), """")
+	VarStr = Replace(VarStr, "%", " ")
+
+	imp_MakeString = "'" & VarStr & "'"
+	
+End Function
+'---
+'
+'---
+Function imp_GetUnitID(UnitShort, UnitTag)
+	Dim Rs, NewUnit
+
+	If UnitShort <> "" Then
+		Set RS = GetRs("select un_id from units where un_tag = " & imp_MakeString(UnitTag))
+	
+		If rs.eof Then
+			Set RS = GetRs("select un_id from units where un_short = " & imp_MakeString(UnitShort))
+	
+			If rs.eof Then
+				Set NewUnit = workarea.Units.Create(UnitShort)
+				NewUnit.ShortName = UnitShort
+				NewUnit.Tag = UnitTag
+				NewUnit.Save
+				imp_GetUnitID = NewUnit.ID
+			Else
+				imp_GetUnitID = rs.Fields(0).Value
+			End If
+		Else
+			imp_GetUnitID = rs.Fields(0).Value
+		End If
+	Else
+		imp_GetUnitID = 0
+	End If
+End Function
+'---
+'
+'---
+Function imp_GetEntID(EntName, EntCode, UnitID, EntRoot, EntType)
+	Dim EntID, Ent, Rs, SQL
+
+	Set Rs = GetRs("select ent_id from entities where ent_name = " & imp_MakeString(EntName))
+
+	If Rs.eof Then
+		Set Ent = EntRoot.Create(EntType, EntName)
+		Ent.Params(prmEntCode).Value = EntCode
+		Ent.UnitID = UnitID
+		Ent.Save
+		imp_GetEntID = Ent.ID
+	Else
+		imp_GetEntID = Rs.Fields(0).Value
+	End If
+
+End Function
+'---
+'
+'---
+Function imp_GetEntID2(EntName, EntCode, UnitID, EntRoot, EntType)
+	Dim EntID, Ent, Rs, SQL
+
+	Set Rs = GetRs("select ent_id from entities where ent_name = " & imp_MakeString(EntName))
+
+	If Rs.eof Then
+		If EntName <> "" Then
+			Set Ent = EntRoot.Create(EntType, EntName)
+			'Ent.Params(prmEntCode).Value = EntCode
+			Ent.UnitID = UnitID
+			Ent.Save
+			imp_GetEntID2 = Ent.ID
+		Else 
+			imp_GetEntID2 = 0
+		End If
+	Else
+		imp_GetEntID2 = Rs.Fields(0).Value
+	End If
+
+End Function
+'---
+'
+'---
+Function imp_LoadRoot(Kind)
+	Dim RootID
+
+	Select Case Kind
+		Case acAgent
+			RootID = com_getparamvalue(workarea, prmDbAgRoot, 0)
+			If RootID = 0 Then 
+				Set imp_LoadRoot = Workarea.Agents
+			Else
+				Set imp_LoadRoot = Workarea.Agent(RootID).Children
+			End If
+		
+		Case acEntity
+			RootID = com_getparamvalue(workarea, prmDbEntRoot, 0)
+			If RootID = 0 Then 
+				Set imp_LoadRoot = Workarea.Entities
+			Else
+				Set imp_LoadRoot = Workarea.Entity(RootID).Children
+			End If
+	End Select
+End Function
+'---
+'
+'---
+Function imp_GetAg(AgCode, AgName, AgType, AgRoot)
+	Dim SQL, aData, AgID, Ag, nAgType
+
+	AgID = 0
+
+	If AgCode <> "" Then
+		SQL = "select top 1 ag_id from agents where ag_code = '" & AgCode & "' and ag_type > 0"
+
+		If GetRs2(SQL, aData) Then
+			AgID = aData(0, 0)
+		End If
+	End If
+
+	If AgID = 0 Then
+		If AgName <> "" Then
+			SQL = "select top 1 ag_id from agents where ag_name = " & imp_makestring(AgName) & " and ag_type > 0"
+
+			If GetRs2(SQL, aData) Then
+				AgID = aData(0, 0)
+			End If
+		End If
+	End If
+
+	If AgID = 0 And AgName <> "" Then
+		If AgType = "" Then
+			nAgType = 1
+		Else
+			nAgType = CLng(AgType)
+		End If
+
+		Set Ag = AgRoot.Create(nAgType, imp_MakeString(AgName))
+		If Not Ag Is Nothing Then
+			Ag.Code = AgCode
+			Ag.Save
+			Set imp_GetAg = Ag
+			Exit Function
+		End If
+	End If
+
+	If AgID <> 0 Then 
+		Set imp_GetAg = workarea.Agent(AgID)
+	Else
+		Set imp_GetAg = Nothing
+	End If
+End Function
+'---
+'
+'---
+Function imp_GetEnt(EntName, IndexName, IndexValue, EntRoot)
+	Dim SQL, aData, Ent
+
+	Set imp_GetEnt = Nothing
+
+	If IndexName <> "" And IndexValue <> "" Then
+		SQL = "select ent_id from entities where ent_type > 1000 and ent_" & IndexName & " =" & Imp_MakeString(IndexValue)
+
+		If GetRs2(SQL, aData) Then
+			Set imp_GetEnt = Workarea.Entity(aData(0, 0))
+			Exit Function
+		End If
+	End If
+
+	If IndexName <> "name" Then
+		SQL = "select ent_id from entities where ent_type > 1000 and ent_name = " & Imp_MakeString(EntName)
+		If GetRs2(SQL, aData) Then
+			Set imp_GetEnt = Workarea.Entity(aData(0, 0))
+			Exit Function
+		End If
+	End If
+
+	If EntName <> "" Then
+		Set Ent = EntRoot.Create(1004, EntName)
+		If Not Ent Is Nothing Then 
+			Set imp_GetEnt = Ent
+		End If
+	End If
+End Function
+'---
+'
+'---
+Function Imp_GetOperationGUID(DocGuid)
+	Dim SQL, aData, Op, Guid
+
+	If DocGuid = "" Then
+		Set Op = Workarea.CeateOperation
+	Else
+		Guid = imp_GuidNormalized(DocGuid)
+		SQL = "select doc_id from documents where doc_guid=" & guid
+
+		If GetRs2(SQL, aData) Then
+			Set Op = Workarea.Operation(aData(0, 0))
+		Else
+			Set Op = Workarea.CreateOperationGUID(guid)
+		End If
+	End If
+	
+	Set Imp_GetOperationGUID = Op
+	
+End Function
+'---
+'
+'---
+Function imp_GuidNormalized(DocGuid)
+
+	imp_GuidNormalized = DocGuid
+
+	If App.AppType = "DAO" Then
+		If InStr(DocGuid, "{guid {") = 0 Then
+			imp_GuidNormalized = "{guid {" & DocGuid & "}}"
+		End If
+	Else
+		If InStr(DocGuid, "{guid {") <> 0 Then
+			imp_GuidNormalized = Trim(Replace(Replace(Replace(DocGuid, "{", ""), "guid", ""), "}", ""))
+		End If			
+	End If
+
+End Function
+'---
+'
+'---

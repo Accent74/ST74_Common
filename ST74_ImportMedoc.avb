@@ -1,0 +1,406 @@
+Option Explicit
+
+'#include "ST74_ADO.avb"
+'#include "ST74_XML.avb"
+'#include "ST74_Const.avb"
+'#include "ST74_Common.avb"
+'#include "ST74_Import.avb"
+'#include "ST74_Tax_Common.avb"
+'#include "ST74_FileDlg.avb"
+'#include "ST74_Forms.avb"
+
+Const LOG_MSG_INFORMATION = 0
+Const LOG_MSG_WARNING = 1
+Const LOG_MSG_ERROR = 2
+Const LOG_MSG_OK = 3
+
+
+' 0 - файл для импорта
+' 1 - корневой узел XML
+' 2 - признак успешного импорта
+' 3 - ссылка на объект протокол
+' 4 - корневой тег
+
+Dim oXml, myCo, AgRoot, EntRoot
+
+'---
+'
+'---
+Sub ST74_ImportFromFile(aPrm)
+	Dim i, DocCount
+	Dim TaxMisc, TaxMiscNo, Op
+	Dim NodeDoc, NodeDocs, DocCode
+	Dim oLog, NodeRule
+
+	Set myCo = Workarea.MyCompany
+	Set EntRoot = imp_LoadRoot(acEntity)
+	Set AgRoot = imp_LoadRoot(acAgent)
+	Set oLog = aPrm(3)
+
+	Set oXml = New XML
+
+	If oXml.Create() Then
+		oXml.xmlFileName = aPrm(0)
+
+		If oXml.Load() Then
+
+			If xmlCheck(oXml, aPrm(4), MyCo.Code, oLog) Then
+				Set NodeDocs = oXml.xml.documentElement.selectNodes("/ZVIT/ORG/CARD")
+
+				For i = 0 To NodeDocs.Length - 1
+					Set NodeDoc = NodeDocs.Item(i).SelectNodes("FIELDS/CHARCODE").Item(0)
+
+					If Not NodeDoc Is Nothing Then	
+						DocCode = NodeDoc.text
+						Set NodeRule = aPrm(1).SelectNodes(DocCode)
+
+						If NodeRule.Length > 0 Then
+							' нашли поддержку документа в шаблонах. Берем первый попавшийся шаблон
+							DoImportMedoc NodeRule.Item(0), NodeDocs.Item(i), DocCode, oLog
+						Else
+							oLog.writelog LOG_MSG_WARNING, Array("В шаблонах не найден документ с кодом:", NodeDoc.text), 0, 0	
+						End If
+					Else
+						oLog.writelog LOG_MSG_WARNING, Array("Не указан код документа CHARCODE"), 0, 0	
+					End If
+					
+				Next
+			End If
+		Else
+			oLog.writelog LOG_MSG_ERROR, Array("Ошибка загрузки XML файла", aPrm(0), oXml.ErrorMsg), 0, 0	
+		End If
+	Else
+		oLog.writelog LOG_MSG_ERROR, Array("Ошибка создания ActiveX", oXml.ErrorMsg), 0, 0			
+	End If
+	
+End Sub
+'---
+'
+'---
+Function xmlCheck(oXml, Tag, MyCoCode, oLog)
+
+	xmlCheck = True
+
+	If Tag <> "" Then
+		If Tag <> oXml.xml.documentElement.nodename Then
+			oLog.writelog LOG_MSG_ERROR, Array("Корневой узел не соответствует ожидаемому. Файл для импорта выбран неправильно"), 0, 0
+			xmlCheck = False
+			Exit Function
+		End If
+	End If
+
+	If MyCoCode <> oXml.xml.documentElement.selectNodes("/ZVIT/ORG/FIELDS").Item(0).text Then
+		oLog.writelog LOG_MSG_ERROR, Array("Импортируемые документы преднразначены для предприятия с другим ОКПО"), 0, 0
+		xmlCheck = False
+	End If
+End Function
+'---
+'
+'---
+Sub DoImportMedoc(NodeRule, NodeDoc, DocCode, oLog)
+	Dim ProcName, ModuleName, TmlSrcName
+	Dim aPrm, Op, ExMap
+
+	ProcName = checknull(NodeRule.GetAttribute("procname"), "")
+	ModuleName = checknull(NodeRule.GetAttribute("modulename"), "")
+	TmlSrcName = checknull(NodeRule.GetAttribute("src"), "")
+
+	Set Op = Workarea.CreateOperation
+	Set ExMap = CreateLibObject("Map")
+
+	If TmlSrcName <> "" Then
+		'	разбираем код по стандартному шаблону
+		ImportOpFromFileMedoc Op, ExMap, NodeDoc, TmlSrcName, DocCode, oLog
+	End If
+	
+	If ModuleName <> "" Then
+		If IsFileExists(ModuleName) Then
+			aPrm = Array(Op, ExMap, NodeDoc, DocCode, oLog)
+			App.RunModule ModuleName, ProcName, aPrm
+		Else
+			' модуль указан, но не найден
+			oLog.writelog LOG_MSG_WARNING, Array("Модуль, указанній в шаблоне, не найден", ModuleName), 0, 0			
+		End If
+	End If
+End Sub
+'---
+'
+'---
+Sub ImportOpFromFileMedoc(Op, ExMap, DocNode, TmlSrcName, DocCode, oLog)
+	Dim oXmlTml, AgRoot, EntRoot
+	Dim AgFrom, AgTo, RootKey, TmlTag
+
+	Set oXmlTml = New XML
+	Set AgRoot = imp_LoadRoot(acAgent)
+	Set EntRoot = imp_LoadRoot(acEntity)
+
+	oXmlTML.xmlFileName = TmlSrcName
+
+	If oXmlTml.Load() Then
+		RootKey = "//" & DocCode 
+
+		TmlTag = oxmltml.xml.selectnodes(RootKey).item(0).getattribute("tmltag")
+stop
+		LoadDocProps Op, DocNode, oXmlTml.Xml.SelectNodes(RootKey & "/doc").Item(0), ExMap
+
+		If TmlTag <> "" Then SetOpTemplate Op, TmlTag
+
+		LoadAgProps AgFrom, DocNode, oXmlTml.Xml.Selectnodes(RootKey & "/agfrom").Item(0)
+		LoadAgProps AgTo, DocNode, oXmlTml.Xml.Selectnodes(RootKey & "/agto").Item(0)
+		LoadBodyProps Op.TransList(1), DocNode, oXmlTml.Xml.Selectnodes(RootKey & "/body").Item(0), EntRoot
+
+		Op.TransList(1).SetAgTo AgTo.ID
+		Op.TransList(1).SetAgFrom AgFrom.ID
+		If Not Form_Save2(Op, ExMap) Then
+			' не сохранили
+			oLog.writelog LOG_MSG_WARNING, Array("Ошибка сохранения документа: №", Op.DocNo, "от", Formatdate2(Op.date, "dd/mm/yyyy"), Op.Name), 0, 0			
+		Else
+			oLog.writelog LOG_MSG_WARNING, Array("Документ сохранен: №", Op.DocNo, "от", Formatdate2(Op.date, "dd/mm/yyyy"), Op.Name), 0, 0			
+		End If
+	Else
+		oLog.writelog LOG_MSG_WARNING, Array("Ошибка загрузки файла шаблона:", TmlSrcName, "Ошибка:", oxml.ErrorMsg), 0, 0			
+
+	End If
+End Sub
+'---
+'
+'---
+Sub LoadBodyProps(TrList, NodeDoc, NodeTmlDoc, EntRoot)
+	Dim IndexName, EntName, EntCat, EntTag, EntBar, EntArt
+	Dim Ent, i, NodeRows, IndexPath, IndexValue
+	Dim Price, Qty, FQty, Sum, UnitCode, UnitName, UnitID, Tr
+
+	IndexName = NodeTmlDoc.GetAttribute("index")
+	IndexPath = NodeTmlDoc.GetAttribute("indexpath")
+
+	Set NodeRows = NodeDoc.SelectNodes(IndexPath)
+
+	For i = 0 To NodeRows.Length - 1
+		With NodeRows.Item(i)
+
+			EntName = GetPathLineValue("name", NodeDoc, NodeTmlDoc, i)
+			EntCat = GetPathLineValue("cat", NodeDoc, NodeTmlDoc, i)
+			EntTag = GetPathLineValue("tag", NodeDoc, NodeTmlDoc, i)
+			EntBar = GetPathLineValue("bar", NodeDoc, NodeTmlDoc, i)
+			EntArt = GetPathLineValue("art", NodeDoc, NodeTmlDoc, i)
+
+			IndexValue = Eval("Ent" & IndexName)
+			Set ent = imp_GetEnt(EntName, IndexName, IndexValue, EntRoot)
+
+			UpdateParams Ent, NodeDoc, NodeTmlDoc.SelectNodes("entparam"), i
+
+			Qty = GetPathLineValue("qty", NodeDoc, NodeTmlDoc, i)
+			FQty = GetPathLineValue("fqty", NodeDoc, NodeTmlDoc, i)
+			Price = GetPathLineValue("price", NodeDoc, NodeTmlDoc, i)
+			Sum = GetPathLineValue("sum", NodeDoc, NodeTmlDoc, i)
+
+			UnitCode = GetPathLineValue("unitcode", NodeDoc, NodeTmlDoc, i)
+			UnitName = GetPathLineValue("unitname", NodeDoc, NodeTmlDoc, i)
+			UnitID = imp_GetUnitID(UnitName, UnitCode)
+	
+			Set Tr = TrList.Item(i + 1)
+
+			UpdateParams Tr, NodeDoc, NodeTmlDoc.SelectNodes("trparam"), i
+
+			If Not Ent Is Nothing Then
+				Tr.EntID = ent.id
+				Tr.UnitID = UnitID
+			End If
+
+			tr.Qty = Str2dbl(Qty)
+			tr.FQty = Str2dbl(FQty)
+			tr.Sum = Str2dbl(Sum)
+
+			SetMiscNode TrList, NodeDoc, NodeTmlDoc.SelectNodes("misccode"), i
+
+		End With
+	Next
+
+End Sub
+'---
+'
+'---
+Sub SetMiscNode(TrList, NodeDoc, NodeTmlRows, RowNo)
+	Dim i, NodeMisc, tag, Path, SQL, aData
+
+	For i = 0 To NodeTmlRows.Length - 1
+		With NodeTmlRows.Item(i)
+			tag = .GetAttribute("tag")
+			path = Replace(.GetAttribute("path"), "#ROWNO", RowNo)
+
+			Set NodeMisc = NodeDoc.SelectNodes(path).Item(0)
+			If Not NodeMisc Is Nothing Then 
+				SQL = "Select msc_id, msc_no from misc where msc_no = (Select top 1 msc_no from misc where msc_tag = '" & Tag & "') and msc_type = 1 and msc_str1 = '" & NodeMisc.Text & "'"
+				If GetRs2(SQL, aData) Then
+					TrList.Item(RowNo + 1).MiscID(aData(1, 0)) = aData(0, 0)
+				End If
+			
+			End If
+		End With
+	Next
+
+End Sub
+'---
+'
+'---
+Sub UpdateParams(ElParams, NodeDoc, ParamNodes, RowNo)
+	Dim i, NodePAram, Name, Path, prmType
+
+	For i = 0 To ParamNodes.Length - 1
+		With ParamNodes.Item(i)
+			name = .GetAttribute("name")
+			path = Replace(.GetAttribute("path"), "#ROWNO", RowNo)
+			prmtype = checknull(.GetAttribute("type"), "C")
+
+			Set NodeParam = NodeDoc.SelectNodes(path).Item(0)
+			If Not NodeParam Is Nothing Then 
+				Select Case prmtype
+					Case "N"
+						com_SetParamValue ElParams, Name, str2dbl(NodeParam.Text)
+					Case "I"
+						com_SetParamValue ElParams, Name, str2Long(NodeParam.Text)
+					Case "D"
+						If IsDate(NodeParam.Text) Then
+							com_SetParamValue ElParams, Name, CDate(NodeParam.Text)
+						Else
+							com_SetParamValue ElParams, Name, 0
+						End If
+					Case Else
+						com_SetParamValue ElParams, Name, NodeParam.Text
+				End Select
+			End If
+		End With
+	Next
+
+End Sub
+'---
+'
+'---
+Sub LoadAgProps(AgFrom, NodeDoc, NodeTmlDoc)
+	Dim AgCode, AgName, AgVatNo, AgRegNo, AgAddress
+	Dim AgPhone, AgType
+
+	AgCode = GetPathValue("code", NodeDoc, NodeTmlDoc)
+	AgName = GetPathValue("name", NodeDoc, NodeTmlDoc)
+	AgVatNo = GetPathValue("vatno", NodeDoc, NodeTmlDoc)
+	AgRegNo = GetPathValue("regno", NodeDoc, NodeTmlDoc)
+	AgAddress = GetPathValue("addr", NodeDoc, NodeTmlDoc)
+	AgType = GetPathValue("type", NodeDoc, NodeTmlDoc)
+	AgPhone = GetPathValue("phone", NodeDoc, NodeTmlDoc)
+
+	Set AgFrom = imp_GetAg(AgCode, AgName, AgType, AgRoot)
+
+	If Not AgFrom Is Nothing Then
+		If AgPhone <> "" Then AgFrom.Phone = AgPhone
+		If AgVatNo <> "" Then AgFrom.VatNo = AgVatNo
+		If AgRegNo <> "" Then AgFrom.RegNo = AgRegNo
+		If AgAddress <> "" Then AgFrom.Country = AgAddress
+		If AgFrom.Modified Then AgFrom.Save
+	End If
+End Sub
+'---
+'
+'---
+Sub LoadDocProps(Op, NodeDoc, NodeTmlDoc, ExMap)
+	Dim Docguid, DocNo, DocDate, ExMapNodes, i
+	Dim Buffer
+
+	Docguid = GetPathValue("docguid", NodeDoc, NodeTmlDoc)
+	Set Op = Imp_GetOperationGUID(Docguid)
+
+	DocDate = GetPathValue("docdate", NodeDoc, NodeTmlDoc)
+	If IsDate(DocDate) Then Op.Date = DocDate
+
+	Op.DocNo = GetPathValue("docno", NodeDoc, NodeTmlDoc)
+	Op.Memo = GetPathValue("docmemo", NodeDoc, NodeTmlDoc)
+
+	Op.Sum = str2dbl(GetPathValue("docsum", NodeDoc, NodeTmlDoc))
+	Op.Sum1 = str2dbl(GetPathValue("docsum1", NodeDoc, NodeTmlDoc))
+	Op.Sum2 = str2dbl(GetPathValue("docsum2", NodeDoc, NodeTmlDoc))
+	Op.Sum3 = str2dbl(GetPathValue("docsum3", NodeDoc, NodeTmlDoc))
+
+	Op.String1 = GetPathValue("docstr1", NodeDoc, NodeTmlDoc)
+	Op.String2 = GetPathValue("docstr2", NodeDoc, NodeTmlDoc)
+	Op.String3 = GetPathValue("docstr3", NodeDoc, NodeTmlDoc)
+
+	Op.Date1 = CheckDate(GetPathValue("docdate1", NodeDoc, NodeTmlDoc), Op.Date1)
+	Op.Date2 = CheckDate(GetPathValue("docdate2", NodeDoc, NodeTmlDoc), Op.Date2)
+	Op.Date3 = CheckDate(GetPathValue("docdate3", NodeDoc, NodeTmlDoc), Op.Date3)
+
+	If Not Op.IsNew Then
+		Buffer = Op.GetExtraData
+		If Buffer <> "" Then ExMap.XML = Buffer
+	End If
+		
+	Set ExMapNodes = NodeTmlDoc.SelectNodes("//doc/*[@props='map']")
+
+	For i = 0 To ExMapNodes.length - 1
+		With ExMapNodes.item(i)
+			ExMap(.getattribute("name")) = GetPathValue(.NodeName, NodeDoc, NodeTmlDoc)
+		End With
+	Next
+
+End Sub
+'---
+'
+'---
+Function CheckDate(DateVal, DefDateVal)
+	If IsDate(DateVal) Then
+		CheckDate = CDate(DateVal)
+	Else
+		CheckDate = DefDateVal
+	End If
+End Function
+'---
+'
+'---
+Function GetPathLineValue(NodeName, NodeDoc, NodeTml, RowNo)
+	Dim NodePath, NodeDocProp, path
+
+	GetPathLineValue = ""
+
+	Set NodePath = NodeTml.SelectNodes(NodeName).item(0)
+	If Not NodePath Is Nothing Then
+		path = Replace(NodePath.GetAttribute("path"), "#ROWNO", RowNo)
+		Set NodeDocProp = NodeDoc.SelectNodes(path).item(0)
+	
+		If Not NodeDocProp Is Nothing Then
+			GetPathLineValue = NodeDocProp.text
+		End If
+	End If
+
+End Function
+'---
+'
+'---
+Function GetPathValue(NodeName, NodeDoc, NodeTml)
+	Dim NodePath, NodeDocProp
+
+	GetPathValue = ""
+
+	Set NodePath = NodeTml.SelectNodes(NodeName).item(0)
+	If Not NodePath Is Nothing Then
+		Set NodeDocProp = NodeDoc.SelectNodes(NodePath.GetAttribute("path")).item(0)
+	
+		If Not NodeDocProp Is Nothing Then
+			GetPathValue = NodeDocProp.text
+		End If
+	End If
+
+End Function
+'---
+'
+'---
+Sub SetOpTemplate(Op, TmlTag)
+	Dim SQL, aData
+
+	SQL = "select top 1 tml_id from templates where tml_tag='" & TmlTag & "'"
+
+	If GetRs2(SQL, aData) Then
+		Op.TemplateID = aData(0, 0)
+		Op.TemplateInvoker2.FireAll
+	End If
+End Sub
+'---
+'
+'---

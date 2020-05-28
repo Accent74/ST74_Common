@@ -1,0 +1,129 @@
+'#include "ST74_ADO.avb"
+'#include "ST74_XML.avb"
+'#include "ST74_Const.avb"
+'#include "ST74_Common.avb"
+'#include "ST74_Import.avb"
+'#include "ST74_Tax_Common.avb"
+'#include "ST74_FileDlg.avb"
+
+Option Explicit
+
+' 0 - массив операций
+' 1 - файл для экспорта
+' 2 - корневой узел XML
+' 3 - признак успешного импорта
+' 4 - ссылка на процедуру вывода протокола импорта
+' 5 - код документа
+
+Dim oXml, myCo, AgRoot, EntRoot
+
+'---
+'
+'---
+Function MedocMakeTransport(oXml)
+	Dim Elem, ElChild
+
+	Set Elem = oXml.xml.CreateElement("TRANSPORT")
+	oXml.CreateElem Elem, "VERSION", "4.1"
+	oXml.CreateElem Elem, "CREATEDATE", Formatdate2(Date(), "dd.mm.yyyy")
+
+	Set MedocMakeTransport = Elem
+
+End Function
+'---
+'
+'---
+Sub ST74_ExportToFile(aPrm)
+	Dim xmlRoot, xmlCode, i, DocCount
+	Dim TaxMisc, TaxMiscNo, Op, XmlORG, xmlFields
+	Dim NodeDoc, xmlFileName, DocCode
+
+	Set myCo = Workarea.MyCompany
+	Set EntRoot = imp_LoadRoot(acEntity)
+	Set AgRoot = imp_LoadRoot(acAgent)
+
+	Set oXml = New XML
+
+	If oXml.Create() Then
+		oXml.xml.appendChild oXml.xml.createProcessingInstruction("xml", "version='1.0' encoding='windows-1251'")
+
+		Set xmlRoot = oXml.xml.CreateElement("ZVIT")
+		oXml.xml.AppendChild xmlRoot
+
+		xmlRoot.AppendChild MedocMakeTransport(oXml)
+
+		Set xmlORG = oXml.xml.CreateElement("ORG")
+		Set xmlFields = oXml.xml.CreateElement("FIELDS")
+
+		oXml.CreateElem xmlFields, "FIELD", MyCo.Code
+		xmlORG.appendChild xmlFields
+
+		For i = 0 To UBound(aPrm(0))
+			Set Op = aPrm(0)(i)
+			Set NodeDoc = MakeMedocXML(Op, oXml, xmlORG, aPrm(1), aPrm(3), DocCode)
+		Next
+
+		xmlRoot.AppendChild xmlOrg
+		xmlFileName = Formatdate2(Now(), "yyyy-mm-dd-hh-nn-ss_") & MyCo.Code & "_" & DocCode
+		
+		If OpenFileSave(xmlFileName, "", "*.xml", "XML-файлы", "Оберить папку для збереження файлу") Then
+			oXml.FileName = xmlFileName
+			If Not oXml.IsError Then 
+				If oXml.SaveAll() Then aPrm(3) = True
+			End If
+		End If
+
+	Else
+		
+	End If
+	
+End Sub
+'---
+'
+'---
+Function MakeMedocXML(Op, oXml, NodeParent, NodeRules, oLog, DocCode)
+	Dim NodeRule, scrXMLFile, aPrm
+	Dim ExMap, Buffer, RetNode, TaxCommon
+
+	If Op.FormID <> 0 Then
+		DocCode = com_getparamvalue(workarea.ProjectItem(Op.FormID), prmPItemExportXML, "")
+
+		If DocCode <> "" Then	
+			Set NodeRule = NodeRules.getElementsByTagName(DocCode).Item(0)
+			
+			If Not NodeRule Is Nothing Then
+				scrXMLFile = checknull(NodeRule.GetAttribute("src"), "")
+				
+				Set TaxCommon = New tax_common_class
+				Set ExMap = CreateLibObject("Map")
+
+				Buffer = Op.GetExtraData
+
+				If Buffer <> "" Then 
+					ExMap.XML = Buffer
+					TaxCommon.LoadMap ExMap
+				End If
+				
+				'	0 - операция для экспорта 
+				'	1 - имя файла или XML строка для шаблона
+				'	2 - объект tax_common_class
+				'	3 - корневой XML
+				'	4 - название тега, который добавляется
+				'	5 - результат
+				aPrm = Array(Op, Iif(scrXMLFile = "", NodeRule,  scrXMLFile), TaxCommon, oXml.xml, NodeParent, Nothing)
+				App.RunModule "ST74_ExportOpToXML.avb", "xmlExportDocNode", aPrm
+
+				Set MakeMedocXML = aPrm(5)
+
+			Else
+			End If
+		Else
+		End If
+	Else
+	End If
+
+End Function
+'---
+'
+'---
+

@@ -1,0 +1,321 @@
+Option Explicit
+
+'-----------------
+'
+' набор процедур для обеспечения операций возврата товара от покупателя SQL
+'
+'-----------------
+
+Function ReturnTo(Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, IsViewError, flBalAccount, flAgFrom, BaseAccCode, BaseAccSortMode)
+	Dim Errors
+	Dim MyCoID
+	
+	MyCoID = WorkArea.MyCompany.ID
+
+	Set Errors = CreateObject("Scripting.Dictionary")
+
+	If ReturnMode = 3 Then
+		ReturnTo = ManualCharge(Op, TrNoTo, TrNoFrom, ReturnMode)
+	Else
+		Pass1 Op, TrNoFrom, ReturnMode, Errors, MyCoID
+
+		If Errors.Count = 0 Then Pass2 Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, flBalAccount, flAgFrom, MyCoID, Errors
+
+		If Errors.Count <> 0 And IsViewError Then 
+			Set WorkArea.Map.Item("ErrorOp") = Op
+			ViewError Errors
+		End If
+
+		ReturnTo = (Errors.Count = 0)
+	End If
+End Function
+
+'-----------------
+'
+'-----------------
+Sub ClearTrans(Op, TrNoTo)
+	Op.TransList(TrNoTo).Rows = 1
+
+	With Op.Trans(TrNoTo, 1)
+		.EntId = 0
+		.Qty = 0
+		.Sum = 0
+	End With
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Function SelectSoldSeriesSQL(EntID, AgBuyerID, AgStorageID, AccStorageID, ParentDocID, OnDate, DocID, MC)
+	Dim Cn
+	Dim Cmd
+
+	Set Cn = WorkArea.AdoConnection
+	Cn.CursorLocation = 2 'курсор на нашей стороне
+
+	Set Cmd = CreateObject("ADODB.Command")
+	Set Cmd.ActiveConnection = Cn 
+
+	' строим остатки в разрезе серий партионного учета
+	Cmd.CommandText = "ST7_SelectSoldSeries"
+
+	' устанавливаем параметры
+	AddParameters Cmd, ParentDocID, 3, 10
+	AddParameters Cmd, AgStorageID, 3, 10
+	AddParameters Cmd, AccStorageID, 3, 10
+	AddParameters Cmd, AgBuyerID, 3, 10
+	AddParameters Cmd, EntID, 3, 10
+	AddParameters Cmd, OnDate, 7, 20
+	AddParameters Cmd, DocID, 3, 10
+	AddParameters Cmd, MC, 3, 10
+	
+	' сообщаем, что команда это инструкция хранимая процедура
+	Cmd.CommandType = 4	
+	' выполнили запрос
+	Set SelectSoldSeriesSQL = 	Cmd.Execute	' выполняем команду 
+
+End Function
+
+'-----------------
+'
+'-----------------
+Sub Pass2(Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, flBalAccount, flAgFrom, MyCoID, Errors)
+	Dim i
+	Dim DictSeries
+	Dim Rs
+	Dim AccID
+	Dim Qty, RestQty
+	Dim AccStorageID
+	Dim RowNo
+	Dim TrStorage
+	Dim SeriesID, SeriesCode
+	Dim SeriesPrice
+
+	Set DictSeries =  CreateObject("Scripting.Dictionary")
+
+	ClearTrans Op, TrNoTo
+	Set TrStorage = Op.TransList(TrNoTo)
+	TrStorage.Inherit 446								' наследовать все, кроме объекта учета
+	RowNo = 0
+
+	If Not flBalAccount Then AccStorageID = Op.Trans(TrNoTo).AccCrID
+
+	For i = 1 To Op.TransList(TrNoFrom).Rows
+		With Op.Trans(TrNoFrom, i)
+			If .EntID <> 0 And .Qty > 0 Then
+				Qty = .Qty
+				If flBalAccount Then AccStorageID = .Entity.AccID
+
+				Set RS = SelectSoldSeriesSQL(.EntID, .AgFromID, .AgToID, AccStorageID, .ParentDocID, Op.Date, Op.ID, MyCoID)
+
+				While Not Rs.Eof And Qty > 0
+					SeriesID = Rs.Fields("SeriesID").Value
+					SeriesCode = CStr(Rs.Fields("DOCID").Value) & "|" & CStr(SeriesID)
+					RestQty = GetDictValue(DictSeries, SeriesCode, Rs.Fields("RestQty").Value)
+
+					If RestQty > 0 Then
+
+						If Rs.Fields("RestSum").Value = 0 Then
+							SeriesPrice = 0
+						Else
+							SeriesPrice = Rs.Fields("RestSum").Value / Rs.Fields("RestQty").Value
+						End If
+
+						If RestQty > Qty Then
+							AddRowToTrans2 TrStorage, .EntID, SeriesID, Qty, SeriesPrice, .ParentDocID, AccStorageID
+							DictSeries.Item(SeriesCode) = DictSeries.Item(SeriesCode) - Qty
+							Qty = 0
+						Else
+							AddRowToTrans2 TrStorage, .EntID, SeriesID, RestQty, SeriesPrice, .ParentDocID, AccStorageID
+							DictSeries.Item(SeriesCode) = 0
+							Qty = Qty - RestQty
+						End If
+					End If
+
+					Rs.MoveNext
+				Wend
+
+				If Qty > 0 Then Errors.Add Errors.Count + 1, Array(acErrorNoQuant, .EntId , Qty, i, AccStorageID, .AgFromID)
+
+			End If
+		End With
+	Next
+		
+	Op.TransList(TrNoFrom).Pack
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Sub AddRowToTrans2(OpTrans, EntID, SeriesID, Qty, Price, ParentDocID, AccCrID)
+	Dim RowNo
+
+	If OpTrans.Item(1).EntID <> 0 Then 
+		RowNo = OpTrans.InsertRow
+	Else
+		RowNo = 1
+	End If
+
+	With OpTrans.Item(RowNo)
+		.EntID = EntID
+		.SeriesID = SeriesID
+		.Qty = -Qty
+		.Price = Price
+		.ParentDocID = ParentDocID
+		.AccCrID = AccCrID
+	End With
+End Sub
+
+'-----------------
+'
+'-----------------
+Sub Pass1(op, TrNo, ReturnMode, Errors, MyCoID)
+	Dim i, NewRow, Qty
+	Dim rs
+	Dim DictDocLines, RestDocLine, RestQty, RestPrice
+
+	Set DictDocLines = CreateObject("Scripting.Dictionary")
+	i = 1
+	Op.TransList(TrNo).Inherit 510			' наследовать все
+
+	While i <= Op.TransList(TrNo).Rows
+		With op.Trans(TrNo, i)
+			If .EntID <> 0 And .Qty > 0 Then
+				Qty = .Qty
+				Set RS = SelectTotalsSoldSQL(.EntID, .AgFromID, .AccCrID, .AgToID, Op.Date, Op.ID, MyCoID)
+
+				While Not rs.eof And Qty > 0
+					RestDocLine = Rs.Fields("SoldDocLineID").Value
+
+					If Rs.Fields("TotalSoldSum").Value = 0 Or Rs.Fields("TotalSoldQty").Value = 0 Then
+						RestPrice = 0
+					Else
+						RestPrice = Rs.Fields("TotalSoldSum").Value / Rs.Fields("TotalSoldQty").Value
+					End If
+
+					RestQty = GetDictValue(DictDocLines, RestDocLine, Rs.Fields("TotalSoldQty").Value)
+
+					If RestQty > 0 Then
+
+						With op.Trans(TrNo, i)
+							.Link = RestDocLine
+							.ParentDocID = Rs.Fields("SoldDocID").Value
+							.Price = RestPrice
+						End With
+
+						If Qty <= RestQty Then
+							DictDocLines.Item(RestDocLine) = DictDocLines.Item(RestDocLine) - Qty
+							Qty = 0
+						Else
+							DictDocLines.Item(RestDocLine) = 0
+							Qty = Qty - RestQty
+	
+							NewRow = Op.TransList(TrNo).InsertRow(i + 1)
+							Op.Trans(TrNo, NewRow).Qty = Qty
+							op.Trans(TrNo, i).Qty = RestQty
+						
+							i = i + 1
+						End If
+					End If
+
+					Rs.MoveNext
+				Wend
+
+				If Qty > 0 Then Errors.Add Errors.Count + 1, Array(acErrorNoQuant, .EntId , Qty, i, .AccCrID, .AgFromID)
+
+			End If
+			i = i + 1
+		End With
+	Wend
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Function SelectTotalsSoldSQL(EntID, AgBuyerID, AccBuyerID, AgStorageID, OnDate, DocID, MyCoID)
+	Dim Cn
+	Dim Cmd
+
+	Set Cn = WorkArea.AdoConnection
+	Cn.CursorLocation = 2 'курсор на нашей стороне
+
+	Set Cmd = CreateObject("ADODB.Command")
+	Set Cmd.ActiveConnection = Cn 
+
+	' строим остатки в разрезе серий партионного учета
+	Cmd.CommandText = "ST7_SelectTotalsSold"
+
+	' устанавливаем параметры
+	AddParameters Cmd, OnDate, 7, 20
+	AddParameters Cmd, AgBuyerID, 3, 10
+	AddParameters Cmd, AccBuyerID, 3, 10
+	AddParameters Cmd, AgStorageID, 3, 10
+	AddParameters Cmd, DocID, 3, 10
+	AddParameters Cmd, MyCoID, 3, 10
+	AddParameters Cmd, EntID, 3, 10
+	
+	' сообщаем, что команда это инструкция хранимая процедура
+	Cmd.CommandType = 4	
+	' выполнили запрос
+	Set SelectTotalsSoldSQL = 	Cmd.Execute	' выполняем команду 
+
+End Function
+'---------
+'
+'---------
+Function GetDictValue(ByRef Dict, ArgKey, ArgValue)
+	If Dict.Exists(ArgKey) Then 
+		GetDictValue = Dict.Item(ArgKey)
+	Else
+		Dict.Add ArgKey, ArgValue
+		GetDictValue = ArgValue
+	End If
+End Function
+
+'------------------------------------------------
+'
+'------------------------------------------------
+Sub AddParameters(Cmd, ArgValue, ArgType, ArgLong)
+	Dim Prm
+
+	' устанавливаем параметры
+	Set Prm = Cmd.CreateParameter(, ArgType, 1, ArgLong)	' 	создаем параметр 
+	Prm.Value = ArgValue														'	присваиваем значение
+	Cmd.Parameters.Append Prm												'	добавляем параметр в коллекцию параметров команды
+
+End Sub
+
+'---------------
+'
+'---------------
+
+Function ManualCharge(Op, TrLstToNo, TrLstFromNo, ReturnMode)
+	Dim Dlg
+	Dim i
+
+	Set Dlg = App.CreateDialog("ST7_ManualRet.adg")
+
+	With Dlg.Map
+		Set .Item("Op") = Op
+		.Item("TrNoFrom") = TrLstFromNo	
+		.Item("TrNoTo") = TrLstToNo
+
+		If ReturnMode = 3 Then .Item("NoSeries") = True
+
+	End With
+
+	Dlg.DoModal
+
+	Set Op = Dlg.Map.Item("Op")
+
+	ManualCharge = Op.Done
+
+End Function
+
+'---------------------------------------------------
+'
+'---------------------------------------------------
+

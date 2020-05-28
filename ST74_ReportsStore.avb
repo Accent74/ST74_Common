@@ -1,0 +1,91 @@
+'#include "ST74_ADO.avb"
+Option Explicit
+
+Class ReportsStore
+	Private pStart, pEnd, pType, ReportCode
+	Private RepMap
+
+	Public ErrorNo
+
+	Private Sub Initialize
+		Set RepMap = CreateLibObjecr("Map")
+		ErrorNo = 0
+		ReportCode = ""
+		UpdatePeriod
+	End Sub
+
+	Public Sub SaveData(Code)
+		Dim RepKey, ErrorMsg
+
+		If Code <> "" Then ReportCode = Code
+
+		If ReportCode <> "" Then
+			RepKey = GetReportKey()
+			SQL = "delete from rep_fields where rep_key = '" & RepKey & "'"
+		
+			If ExecQuery(SQL, ErrorMsg) = 0 Then
+				Keys = RepMap.Keys
+
+				For i = 0 To UBound(Kyes)
+					
+					SQL = "insert into rep_fields (rep_key, rf_name, rf_value, rf_type) values ('" & RepKey & "', " & _
+																																		"'" & keys(i) & "', " & _
+																																		"'" & RepMap(keys(i)) & "', " & _
+																																		& VarType(RepMap(keys(i))) & ")"
+					If ExecQuery(SQL, ErrorMsg) <> 0 Then
+						Exit For
+					End If
+				Next
+			Else
+				MsgBox ErrorMsg
+			End If
+	End Sub
+
+	Public Sub LoadData(Code)
+		Dim RepKey, SQL, aData, i
+
+		If Code <> "" Then ReportCode = Code
+
+		If ReportCode <> "" Then
+			RepKey = GetReportKey()
+			RepMap.RemovaAll
+
+			SQL = "select rf_name, rf_value, rf_type from rep_fields where rep_key = '" & RepKey & "'"
+
+			If GetRs2(SQL, aData) Then
+				For i = 0 To UBound(aData, 2)
+					RepMap(aData(0, i)) = convert(aData(1, i), aData(2, i))
+				Next
+			End If
+
+		Else
+			ErrorNo = 1
+		End If
+	End Sub
+
+	Public Sub UpdatePeriod
+		With workarea.period
+			pStart = .Start
+			pEnd = .End
+			pType = .Type
+		End With
+	End Sub	
+	
+	Private Function GetReportKey()
+		GetReportKey = ReportCode & Formatdate2(dStart, ":yyyy:mm:dd") & Formatdate2(dEnd, ":yyyy:mm:dd") & ":" & pType
+	End Function	
+
+	Private Function convert(Data2Convert, DataType)
+		Select Case DataType
+			Case vbDouble, vbCurrency
+				convert = Str2Dbl(Data2Convert)
+			Case vbDate
+				convert = CDate(Data2Convert)
+			Case vbLong
+				convert = Str2Long(Data2Convert)
+			Case Else
+				convert = Data2Convert
+		End Select
+	End Function
+
+End Class

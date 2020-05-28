@@ -1,0 +1,77 @@
+'---
+'
+'---
+Sub Form_ImportMedoc(Op)
+	Dim xmlFileName, aPrm, ErrMsg, Caption
+	Dim AgRoot, EntRoot, AgRootID, EntRootID, ModuleName
+
+	ModuleName = Form_GetFileName(Op)
+
+	If Op.FormID <> 0 Then
+		Caption = Workarea.ProjectItem(Op.FormID).Name
+	Else
+		Caption = ""
+	End If
+
+	EntRootID = com_getparamvalue(Workarea, prmDBEntRoot , 0)
+
+	If EntRootID = 0 Then
+		Set EntRoot = workarea.entities
+	Else
+		Set EntRoot = Workarea.Entity(EntRootID).Children
+	End If
+
+	AgRootID = com_getparamvalue(Workarea, prmDBAgRoot , 0)
+
+	If AgRootID = 0 Then
+		Set AgRoot = workarea.agents
+	Else
+		Set AgRoot = Workarea.Agent(AgRootID).Children
+	End If
+
+	If ModuleName <> "" Then
+		If OpenFileRead(xmlFileName, "", "*.xml", "XML-файли M.E.Doc", Caption) Then
+			aPrm = Array(xmlFileName, "", AgRoot, EntRoot, ErrMsg, Op, CreateLibObject("Map"))
+			App.RunModule ModuleName & "_MDOC_Imp.avb", "ImportMEDocXMLInOp", aPrm
+		End If
+	End If
+End Sub
+'---
+'
+'---
+Sub Form_ExportMedoc(Op, Form, RefSaveOperation)
+	Dim xmlFileName, aPrm, ModuleName
+
+	If Op.Modified Or Op.IsNew Then
+		If MsgBox("Экспортировать можно только сохранённые операции." & vbNewLine & "Сохранить ?", _
+					vbQuestion + vbYesNo, "Экспорт/Импорт в/из M.E.Doc") <> vbYes Then 
+			Exit Sub
+		ElseIf RefSaveOperation() Then
+			Form_Save Op, Form
+		End If
+	End If
+
+	xmlFileName = Op.FormName & "_" & Op.DocNo & "_" & Op.Date & ".xml"
+	aPrm = Array(Op, xmlFileName, True)
+
+	ModuleName = Form_GetFileName(Op)
+
+	If ModuleName <> "" Then
+		App.RunModule ModuleName & "_MDOC_Exp.avb", "ExportOpIntoMEDocXML", aPrm
+	End If
+End Sub
+'---
+'
+'---
+Function Form_GetFileName(Op)
+	Dim ModuleName
+
+	If Op.FormID <> 0 Then
+		ModuleName = Workarea.ProjectItem(Op.FormID).FileName
+		ModuleName = Left(ModuleName, InStrRev(ModuleName, ".") - 1)
+	Else
+		ModuleName = ""
+	End If
+
+	Form_GetFileName = ModuleName
+End Function

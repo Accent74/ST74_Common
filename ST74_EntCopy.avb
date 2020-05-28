@@ -1,0 +1,138 @@
+Option Explicit
+
+Const adCmdText = 1
+
+'---
+'
+'---
+Sub ST74_EntityCopy
+	Dim DstEnt, SrcEnt, EntID
+
+	EntID = workarea.map("KindID")
+	workarea.map.Remove "KindID"
+
+	If EntID = 0 Then Exit Sub
+
+	Set SrcEnt = Workarea.Entity(EntID)
+
+	If Not SrcEnt.Parent Is Nothing Then
+		Set DstEnt = SrcEnt.Parent.Children.Create(SrcEnt.Type, "(Копія)" & SrcEnt.Name)
+	Else
+		Set DstEnt = Workarea.Entities.Create(SrcEnt.Type, "(Копія)" & SrcEnt.Name)
+	End If
+
+	UpdateProps Array(SrcEnt.ID, DstEnt.ID)
+	UpdateRecipes Array(SrcEnt, DstEnt)
+
+	Workarea.Window.refresh
+End Sub
+'---
+'
+'---
+Sub UpdateRecipes(aEnts)
+	Dim i, NewRecipe, DstRecipes
+	Dim SrcEnt, DstEnt
+
+	Set SrcEnt = aEnts(0)
+	Set DstEnt = aEnts(1)
+
+	Set DstRecipes = DstEnt.Recipes
+
+	With SrcEnt.Recipes
+		For i = 1 To .Count
+			With .Item(i)
+				Set NewRecipe = DstRecipes.Create(.Name, .Qty)
+				NewRecipe.DateOut = .DateOut
+				NewRecipe.DateIn = .DateIn
+				NewRecipe.Memo = .Memo
+				NewRecipe.Tag = .Tag
+				NewRecipe.Save
+
+				CopyRecipeEntries NewRecipe.ID, .ID
+			End With
+		Next
+	End With
+
+End Sub
+'---
+'
+'---
+Sub CopyRecipeEntries(DstRecipeID, SrcRecipeID)
+	Dim SQL, Rs
+
+	SQL = "INSERT INTO RP_CONTENTS ( RP_ID, ENT_ID, RC_QTY, RC_NO, RC_CY1, RC_CY2, RC_PERCENT, RC_TAG, AG_ID, UN_ID ) " & _
+			"Select " & DstRecipeID & ", RP_CONTENTS.ENT_ID, RP_CONTENTS.RC_QTY, RP_CONTENTS.RC_NO, RP_CONTENTS.RC_CY1, " & _
+			"RP_CONTENTS.RC_CY2, RP_CONTENTS.RC_PERCENT, RP_CONTENTS.RC_TAG, RP_CONTENTS.AG_ID, RP_CONTENTS.UN_ID " & _
+			"FROM RP_CONTENTS " & _
+			"WHERE (((RP_CONTENTS.RP_ID)=" & SrcRecipeID & "))"
+
+	If App.AppType = "DAO" Then
+		Workarea.DAODataBase.Execute SQL
+	Else
+		Set rs = WorkArea.AdoConnection.Execute(sql,, adCmdText)
+	End If
+	
+End Sub
+'---
+'
+'---
+Sub UpdateProps(aEntsID)
+	Dim SQL, DstEntID, SrcEntID, Ent, EntCode, Rs
+
+	DstEntID = aEntsID(1)
+
+	Set Ent = Workarea.Entity(aEntsID(0))
+
+	If Ent.IsAsset Then
+		EntCode = "ENT_CODE = '" & ent.Asset.code & "',  "
+	Else
+		EntCode = ""
+	End If
+
+	SQL = 	"UPDATE ENTITIES " & _
+				"Set " & _
+				EntCode & _
+				"ENT_TAG = '" & ent.tag & "', " & _
+				"ENT_CAT = '" & ent.cat & "', " & _
+				"ENT_NOM = '" & ent.nom & "', " & _
+				"ENT_ART = '" & ent.art & "', " & _
+				"ENT_BAR = '" & ent.bar & "', " & _
+				"ENT_MEMO = '" & ent.memo & "',  " & _
+				"UN_ID = " & ent.unitid & ", " & _
+				"ACC_ID = " & ent.accid & ",  " & _
+				"UN_SELF = " & iif(ent.unself, -1, 0) & ",  " & _
+				"ACC_SELF = " & iif(ent.acself, -1, 0) & " " & _
+				"WHERE ENT_ID = " & DstEntID
+
+	If App.AppType = "DAO" Then
+		Workarea.DAODataBase.Execute SQL
+	Else
+		Set rs = WorkArea.AdoConnection.Execute(sql,, adCmdText)
+	End If
+
+	If Ent.IsAsset Then
+		' нужно добавить копирование свойства для ОС
+		SQL = "insert into ENT_ASSETS (" & _
+					"ENT_ID, AST_IN_DATE, AST_ENABLED, AST_IN_ACT_NO, AST_IN_ACT_DATE, AST_LAST_OWNER_ID,AST_MANUFACT," & _
+					"AST_MANUF_DATE, AST_PASSPORT, AST_REG_NO, AST_DEPREC_CODE, AST_DEPREC_PERCENT, AST_DEFERRAL_ACC," & _
+					"AST_CONTRA_ACC, AST_ACQ_COST, AST_ACQ_DEPREC, AST_OUT_DATE, AST_OUT_ACT_NO, AST_OUT_ACT_DATE," & _
+					"AST_OUT_REASON, AST_RES_VALUE, AST_USEFUL_LIFE, AST_CURRENT_DEPREC) " & _
+					"select " & DstEntID & ", " & _
+					"AST_IN_DATE, AST_ENABLED, AST_IN_ACT_NO, AST_IN_ACT_DATE, AST_LAST_OWNER_ID,AST_MANUFACT," & _
+					"AST_MANUF_DATE, AST_PASSPORT, AST_REG_NO, AST_DEPREC_CODE, AST_DEPREC_PERCENT, AST_DEFERRAL_ACC," & _
+					"AST_CONTRA_ACC, AST_ACQ_COST, AST_ACQ_DEPREC, AST_OUT_DATE, AST_OUT_ACT_NO, AST_OUT_ACT_DATE," & _
+					"AST_OUT_REASON, AST_RES_VALUE, AST_USEFUL_LIFE, AST_CURRENT_DEPREC " & _
+					"from ENT_ASSETS " & _
+					"where ENT_ASSETS.ent_id = " & Ent.ID
+
+		If App.AppType = "DAO" Then
+			Workarea.DAODataBase.Execute SQL
+		Else
+			Set rs = WorkArea.AdoConnection.Execute(sql,, adCmdText)
+		End If
+	End If
+
+End Sub
+'---
+'
+'---

@@ -1,0 +1,163 @@
+Option Explicit
+
+'---
+'
+'---
+Function OpenFileRead(ByRef FilePath, ByVal InitialDir, FileExt, FileExtDescr, Caption)
+	Dim FileDlg, RD, aPath
+
+	If InitialDir = "" Then
+		InitialDir = GetInitialDir(FileExt)
+	End If
+	
+	Set FileDlg = CreateLibObject("FileDialog")
+	FileDlg.Caption = Caption
+	FileDlg.FileMustExists = True
+	FileDlg.InitialDir = InitialDir
+	FileDlg.Filter = FileExtDescr & "|" & FileExt & "|Все файлы (*.*)|*.*"
+
+	If FileDlg.ShowOpen = vbOK Then
+		FilePath = FileDlg.PathName
+		Workarea.userParam(workarea.DBUser & ":OpenFile") = Left(FileDlg.PathName, InStrRev(FileDlg.PathName, "\"))
+	Else
+		FilePath = ""
+	End If
+
+	OpenFileRead = (FilePath <> "")
+
+End Function
+'---
+'
+'---
+Function OpenFileReadMulti(ByRef aFiles, ByVal InitialDir, FileExt, FileExtDescr, Caption)
+	Dim FileDlg, RD, aPath, i, Path
+
+	If InitialDir = "" Then
+		InitialDir = GetInitialDir(FileExt)
+	End If
+	
+	Set FileDlg = CreateObject("MSComDlg.CommonDialog")
+	FileDlg.DialogTitle = Caption
+	FileDlg.InitDir = InitialDir
+	FileDlg.Filter = FileExtDescr & "|" & FileExt & "|Все файлы (*.*)|*.*"
+
+	'FileDlg.FilterIndex = 2
+	FileDlg.Flags = 2621952
+	FileDlg.MaxFileSize =32000
+
+	FileDlg.ShowOpen
+
+	If FileDlg.Filename <> "" Then
+		aFiles = Split(FileDlg.Filename, vbNullChar)
+
+		If UBound(aFiles) > 0 Then
+			Path = aFiles(0) & "\"
+			Workarea.userParam(workarea.DBUser & ":OpenFile") = Path
+
+			For i = 0 To UBound(aFiles)
+				If i < UBound(aFiles) Then
+					aFiles(i) = Path & aFiles(i + 1)
+				Else
+					aFiles(i) = ""
+				End If
+			Next
+
+		End If
+	Else
+		aFiles = Array()
+	End If
+
+	OpenFileReadMulti = (UBound(aFiles) <> -1)
+
+End Function
+'---
+'
+'---
+Function OpenFileSave(ByRef FilePath, ByVal InitialDir, FileExt, FileExtDescr, Caption)
+	Dim FileDlg, RD, aPath
+
+	If InitialDir = "" Then
+		InitialDir = GetInitialDir(FileExt)
+	End If
+	
+	Set FileDlg = CreateLibObject("FileDialog")
+	FileDlg.Caption = Caption
+	FileDlg.DefaultName = FilePath
+	FileDlg.DefaultExt = Token(FileExt, 2, "|")
+	FileDlg.FileMustExists = True
+	FileDlg.InitialDir = InitialDir
+	FileDlg.Filter = FileExtDescr & "|" & FileExt & "|Все файлы (*.*)|*.*"
+
+	If FileDlg.ShowSave = vbOK Then
+		FilePath = FileDlg.PathName
+		Workarea.userParam(workarea.DBUser & ":OpenFile") = Left(FileDlg.PathName, InStrRev(FileDlg.PathName, "\"))
+	Else
+		FilePath = ""
+	End If
+
+	OpenFileSave = (FilePath <> "")
+End Function
+'---
+'
+'---
+Function GetInitialDir(FileMask)
+	Dim RD, DirPath, aPath
+
+	If IsNull(Workarea.userParam(workarea.DBUser & ":OpenFile")) Then
+		Set RD = CreateLibObject("Redirect")
+		aPath = RD.GetPathArray(FileMask)
+	
+		If UBound(aPath) <> -1 Then
+			DirPath = aPAth(0)
+			If Right(DirPath, 1) <> "\" Then DirPath = DirPath & "\"
+			GetInitialDir = DirPath
+		Else
+			GetInitialDir = ""
+		End If
+	Else
+		GetInitialDir = Workarea.userParam(workarea.DBUser & ":OpenFile")
+	End If
+
+End Function
+'---
+'
+'---
+Function OpenFileReadFolder(aFiles, ByVal FileExt, Flags, Caption)
+	Dim objShell, dFiles, i
+	Dim objFolder, fldFiles,  fldFile, Pos
+
+	aFiles = Array()
+	OpenFileReadFolder = False
+	Set dFiles = CreateObject("Scripting.Dictionary")
+	Set objShell = CreateObject("Shell.Application")
+	Set objFolder = objShell.BrowseForFolder(0, Caption, 0, Flags)
+	FileExt = UCase(FileExt)
+
+  	If (Not objFolder Is Nothing) Then
+  		Set fldFiles = objFolder.Items()
+		For Each fldFile In fldFiles
+			If Not (fldFile.IsFolder Or fldFile.IsLink) Then
+				Pos = InStrRev(fldFile.path, ".")
+				If Pos > 0 Then
+					If UCase(Mid(fldFile.path, Pos + 1)) = FileExt Then
+						dFiles.Add dFiles.Count + 1, fldFile.path
+						OpenFileReadFolder = True
+					End If
+				End If
+			End If
+		Next
+
+'		ReDim Preserve aFiles(dFiles.Count)
+	
+'		For i = 1 To dFiles.Count
+		aFiles = dFiles.Items
+'		Next
+		
+	End If
+
+  	Set objFolder = Nothing
+	Set objShell = Nothing
+End Function 
+'---
+'
+'---

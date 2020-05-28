@@ -1,0 +1,90 @@
+'#include "ST74_Common.avb"
+'#include "ST74_Const.avb"
+
+Option Explicit
+
+Sub UpdateTrPrice(TrList)
+	Dim Prm
+
+	Set prm = TrList.Parent
+	TrList.EnumTrans GetRef("UpdateTrPriceRow"), prm
+
+End Sub
+
+Function UpdateTrPriceRow(tr, ByRef Op)
+	Dim Qty
+
+	UpdateTrPriceRow = True
+
+	Qty = Tr.Qty
+	com_SetPAramValue Tr, prmTrPrice, com_CalcEntAvgPrice(Op.Long1, Tr.AgToID, Tr.EntID, Op.ID, Op.Date)
+	Tr.Qty = Qty
+
+End Function
+
+'------------------
+'расчет расхождений (недостача - 2я проводка, излишки - 3я проводка)
+'------------------
+Sub CalcDifference(Op)
+	Dim prm
+	Dim i, 	RowNo
+
+	'если операция изменялась, то пересчитываем
+	If Op.Modified Then
+		Com_ClearTrans Op.TransList(2)
+		Com_ClearTrans Op.TransList(3)
+
+		RowNo = 0
+
+		Op.TransList(1).EnumTrans GetRef("CalcDiffRow"), Op
+
+		Op.TransList(2).SetAccCr Op.Long1
+		Op.TransList(3).SetAccDb Op.Long1
+
+	End If
+End Sub
+'----
+'
+'----
+Function CalcDiffRow(Tr, ByRef Op)
+	Dim Tr2, Tr3, TrSum
+
+	CalcDiffRow = True
+
+	If Tr.EntID <> 0 Then
+		Set Tr2 = Op.Trans(2, Tr.RowNo2)
+		Set Tr3 = Op.Trans(3, Tr.RowNo2)
+
+		Tr2.EntID = Tr.EntID
+		Tr3.EntID = Tr.EntID
+
+		TrSum = Tr.Params(prmTrPrice).Value2 * Tr.FQty
+		Tr2.Sum = 0
+		Tr2.Qty = 0
+		Tr3.Sum = 0
+		Tr3.Qty = 0
+
+		'в учете больше, чем фактически
+		If Tr.Qty > Tr.FQty Then
+			' недостача
+			Tr2.Qty = Tr.Qty - Tr.FQty
+			Tr2.Sum = Tr.Sum - Tr.FQty * Tr.Price
+		'в учете меньше, чем фактически
+		ElseIf Tr.Qty < Tr.FQty Then
+			' излишки
+			Tr3.Qty = Tr.FQty - Tr.Qty
+			Tr3.Sum = Tr.FQty * Tr.Price - Tr.Sum
+		' факт сумма больше учетной, нужно наценить
+		ElseIf TrSum > Tr.Sum Then
+			Tr3.Qty = 0
+			Tr3.Sum = TrSum - Tr.Sum
+		ElseIf TrSum < Tr.Sum Then
+			Tr2.Qty = 0
+			Tr2.Sum = Tr.Sum - TrSum
+		End If
+	End If
+
+End Function
+'----
+'
+'----

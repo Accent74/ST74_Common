@@ -1,0 +1,371 @@
+Option Explicit
+
+'-----------------
+'
+' набор процедур для обеспечения операций возврата товара от покупателя DAO
+'
+'-----------------
+
+Function ReturnTo(Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, IsViewError, flBalAccount, flAgFrom, BaseAccCode, BaseAccSortMode)
+	Dim Errors
+	Dim MyCoID
+	
+	MyCoID = WorkArea.MyCompany.ID
+
+	Set Errors = CreateObject("Scripting.Dictionary")
+
+'	If ReturnMode = 3 Then 
+'		ReturnTo = ManualCharge(Op, TrNoTo, TrNoFrom, ReturnMode) - старая
+		ReturnTo = ManualCharge(Op, TrNoTo, TrNoFrom, ReturnMode, IsViewError)
+'	Else
+'		Pass1 Op, TrNoFrom, ReturnMode, Errors, MyCoID
+
+'		If Errors.Count = 0 Then Pass2 Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, flBalAccount, flAgFrom, MyCoID, Errors
+
+'		If Errors.Count <> 0 And IsViewError Then
+'			Set WorkArea.Map.Item("ErrorOp") = Op
+'			ViewError Errors
+'		End If
+
+'		ReturnTo = (Errors.Count = 0)
+'	End If
+
+End Function
+
+'-----------------
+'
+'-----------------
+Sub ClearTrans(Op, TrNoTo)
+	Op.TransList(TrNoTo).Rows = 1
+
+	With Op.Trans(TrNoTo, 1)
+		.EntId = 0
+		.Qty = 0
+		.Sum = 0
+	End With
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Function SelectSoldSeriesDAO(EntID, AgBuyerID, AgStorageID, AccStorageID, ParentDocID, OnDate, DocID, MC)
+	Dim QD
+
+	Set QD = WorkArea.DAODataBase.CreateQueryDef("")
+
+	With QD
+		.SQL =	"PARAMETERS ParentDocID Long, AgStorageID Long, AccStorageID Long, AgBuyerID Long, EntID Long, OnDate DateTime, DocID Long, MC Long ; " & _
+					"Select JOURNAL.SER_ID AS SeriesID, Sum([J_QTY]*IIf([DOC_ID]=[ParentDocID],1,-1)) AS RestQty, Sum([J_SUM]*IIf([DOC_ID]=[ParentDocID],1,-1)) AS RestSum, JOURNAL.DOC_ID " & _
+					"FROM JOURNAL " & _
+					"WHERE ((([DOC_ID]=[ParentDocID] Or [PDOC_ID]=[ParentDocID])=True) And ((JOURNAL.ACC_CR)=[AccStorageID]) And ((JOURNAL.J_AG2)=[AgStorageID]) And ((JOURNAL.J_AG1)=[AgBuyerID]) And ((JOURNAL.J_ENT)=[EntID]) And ((JOURNAL.J_DONE)=2)) " & _
+					"GROUP BY JOURNAL.SER_ID, JOURNAL.DOC_ID, JOURNAL.J_DATE, JOURNAL.MC_ID " & _
+					"HAVING (((Sum([J_QTY]*IIf([DOC_ID]=[ParentDocID],1,-1)))<>0) And ((JOURNAL.DOC_ID)<>[DocId]) And ((JOURNAL.J_DATE)<=[OnDate]) and JOURNAL.MC_ID=[MC])"
+
+		.Parameters(0).Value = ParentDocID
+		.Parameters(1).Value = AgStorageID 
+		.Parameters(2).Value = AccStorageID 
+		.Parameters(3).Value = AgBuyerID
+		.Parameters(4).Value = EntID
+		.Parameters(5).Value = OnDate
+		.Parameters(6).Value = DocID
+		.Parameters(7).Value = MC
+
+		Set SelectSoldSeriesDAO = .OpenRecordSet
+
+	End With
+
+End Function
+
+'-----------------
+'
+'-----------------
+Sub Pass2(Op, TrNoTo, TrNoFrom, ReturnMode, flWrite, flBalAccount, flAgFrom, MyCoID, Errors)
+	Dim i
+	Dim DictSeries
+	Dim Rs
+	Dim AccID
+	Dim Qty, RestQty
+	Dim AccStorageID
+	Dim RowNo
+	Dim TrStorage
+	Dim SeriesID, SeriesCode
+	Dim SeriesPrice
+
+	Set DictSeries =  CreateObject("Scripting.Dictionary")
+
+	ClearTrans Op, TrNoTo
+	Set TrStorage = Op.TransList(TrNoTo)
+	TrStorage.Inherit 446								' наследовать все, кроме объекта учета
+	RowNo = 0
+
+	If Not flBalAccount Then AccStorageID = Op.Trans(TrNoTo).AccCrID
+
+	For i = 1 To Op.TransList(TrNoFrom).Rows
+		With Op.Trans(TrNoFrom, i)
+			If .EntID <> 0 And .Qty > 0 Then
+				Qty = .Qty
+				If flBalAccount Then AccStorageID = .Entity.AccID
+
+				Set RS = SelectSoldSeriesDAO(.EntID, .AgFromID, .AgToID, AccStorageID, .ParentDocID, Op.Date, Op.ID, MyCoID)
+
+				While Not Rs.Eof And Qty > 0
+					SeriesID = Rs.Fields("SeriesID").Value
+					SeriesCode = CStr(Rs.Fields("DOC_ID").Value) & "|" & CStr(SeriesID)
+					RestQty = GetDictValue(DictSeries, SeriesCode, Rs.Fields("RestQty").Value)
+
+					If RestQty > 0 Then
+						If Rs.Fields("RestSum").Value = 0 Then
+							SeriesPrice = 0
+						Else
+							SeriesPrice = Rs.Fields("RestSum").Value / Rs.Fields("RestQty").Value
+						End If
+
+						If RestQty > Qty Then
+							AddRowToTrans TrStorage, .EntID, SeriesID, Qty, SeriesPrice, .ParentDocID, AccStorageID
+							DictSeries.Item(SeriesCode) = DictSeries.Item(SeriesID) - Qty
+							Qty = 0
+						Else
+							AddRowToTrans TrStorage, .EntID, SeriesID, RestQty, SeriesPrice, .ParentDocID, AccStorageID
+							DictSeries.Item(SeriesCode) = 0
+							Qty = Qty - RestQty
+						End If
+					End If
+
+					Rs.MoveNext
+				Wend
+
+				If Qty > 0 Then Errors.Add Errors.Count + 1, Array(acErrorNoQuant, .EntId , Qty, i, AccStorageID, .AgFromID)
+
+			End If
+		End With
+	Next
+		
+	Op.TransList(TrNoFrom).Pack
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Sub AddRowToTrans(OpTrans, EntID, SeriesID, Qty, Price, ParentDocID, AccCrID)
+	Dim RowNo
+
+	If OpTrans.Item(1).EntID <> 0 Then 
+		RowNo = OpTrans.InsertRow
+	Else
+		RowNo = 1
+	End If
+
+	With OpTrans.Item(RowNo)
+		.EntID = EntID
+		.SeriesID = SeriesID
+		.Qty = -Qty
+		.Price = Price
+		.ParentDocID = ParentDocID
+		.AccCrID = AccCrID
+	End With
+End Sub
+
+'-----------------
+'
+'-----------------
+Sub Pass1(op, TrNo, ReturnMode, Errors, MyCoID)
+	Dim i, NewRow, Qty
+	Dim rs
+	Dim DictDocLines, RestDocLine, RestQty
+
+	Set DictDocLines = CreateObject("Scripting.Dictionary")
+	i = 1
+	Op.TransList(TrNo).Inherit 510			' наследовать все
+
+	While i <= Op.TransList(TrNo).Rows
+		With op.Trans(TrNo, i)
+			If .EntID <> 0 And .Qty > 0 Then
+				Qty = .Qty
+				Set RS = SelectTotalsSold(.EntID, .AgFromID, .AccCrID, .AgToID, Op.Date, Op.ID, MyCoID)
+
+				While Not rs.eof And Qty > 0
+					RestDocLine = Rs.Fields("SoldDocLineID").Value
+					RestQty = GetDictValue(DictDocLines, RestDocLine, Rs.Fields("TotalSoldQty").Value)
+
+					If RestQty > 0 Then
+
+						With op.Trans(TrNo, i)
+							.Link = RestDocLine
+							.ParentDocID = Rs.Fields("SoldDocID").Value
+							.Price = Rs.Fields("SoldPrice").Value
+						End With
+
+						If Qty <= RestQty Then
+							DictDocLines.Item(RestDocLine) = DictDocLines.Item(RestDocLine) - Qty
+							Qty = 0
+						Else
+							DictDocLines.Item(RestDocLine) = 0
+							Qty = Qty - RestQty
+	
+							NewRow = Op.TransList(TrNo).InsertRow(i + 1)
+							Op.Trans(TrNo, NewRow).Qty = Qty
+							op.Trans(TrNo, i).Qty = RestQty
+						
+							i = i + 1
+						End If
+					End If
+
+					Rs.MoveNext
+				Wend
+
+				If Qty > 0 Then Errors.Add Errors.Count + 1, Array(acErrorNoQuant, .EntId , Qty, i, .AccCrID, .AgFromID)
+
+			End If
+			i = i + 1
+		End With
+	Wend
+
+End Sub
+
+'-----------------
+'
+'-----------------
+Function SelectTotalsSold(EntID, AgBuyerID, AccBuyerID, AgStorageID, OnDate, DocID, MyCoID)
+	Dim Qd
+
+	Set Qd = WorkArea.DAODataBase.CreateQueryDef("")
+
+	With QD
+		.SQL =	"PARAMETERS OnDate datetime, AgBuyerID long, AccBuyerID long, AgStorageID long,DocID Long, MC long, prmEntID Long ; " & _
+					"Select ST7_SelectTotalsSold.DocID AS SoldDocID, ST7_SelectTotalsSold.LineID AS SoldDocLineID, Sum(ST7_SelectTotalsSold.SaleSum) AS TotalSoldSum, Sum(ST7_SelectTotalsSold.SaleQty) AS TotalSoldQty, First(ST7_SelectTotalsSold.SalePrice) AS SoldPrice " & _
+					"FROM ST7_SelectTotalsSold " & _
+					"GROUP BY ST7_SelectTotalsSold.DocID, ST7_SelectTotalsSold.LineID, ST7_SelectTotalsSold.EntID " & _
+					"HAVING (((ST7_SelectTotalsSold.EntID)=[prmEntID]) And ((Sum(ST7_SelectTotalsSold.SaleQty))<>0)) "
+
+		.Parameters(0).Value = OnDate
+		.Parameters(1).Value = AgBuyerID
+		.Parameters(2).Value = AccBuyerID
+		.Parameters(3).Value = AgStorageID
+		.Parameters(4).Value = DocID
+		.Parameters(5).Value = MyCoID
+		.Parameters(6).Value = EntID
+
+		Set SelectTotalsSold = .OpenRecordSet
+	End With
+
+End Function
+'---------
+'
+'---------
+Function GetDictValue(ByRef Dict, ArgKey, ArgValue)
+	If Dict.Exists(ArgKey) Then 
+		GetDictValue = Dict.Item(ArgKey)
+	Else
+		Dict.Add ArgKey, ArgValue
+		GetDictValue = ArgValue
+	End If
+End Function
+
+'-----------------
+'
+'-----------------
+' старая
+'Function ManualCharge(Op, TrLstToNo, TrLstFromNo, ReturnMode)
+'	Dim Dlg
+'	Dim i
+'
+'	Set Dlg = App.CreateDialog("ST7_ManualRet.adg")
+'
+'	With Dlg.Map
+'		Set .Item("Op") = Op
+'		.Item("TrNoFrom") = TrLstFromNo	
+'		.Item("TrNoTo") = TrLstToNo
+'		.Item("NoSeries") = (ReturnMode = 4)
+'	End With
+'
+'	Dlg.DoModal
+'
+'	Set Op = Dlg.Map.Item("Op")
+'	ManualCharge = Op.Done
+'
+'End Function
+'-----------------
+'
+'-----------------
+
+Function ManualCharge(Op, TrLstToNo, TrLstFromNo, ReturnMode, IsViewError)
+	Dim NoSeries
+
+	NoSeries = False
+
+	Op.CopyEntSeries TrLstToNo, TrLstFromNo
+'	op.TransList(3).CalcQty "=Q1"
+	op.TransList(TrLstToNo).CalcQty "=Q1"
+	Op.CopyAgents TrLstToNo, True, TrLstFromNo, False, False
+	If Op.TransList(TrLstToNo).Rows>1 Then Op.TransList(TrLstToNo).Pack
+
+	Op.Translist(TrLstToNo).EnumTrans GetRef("CheckSeriesRow"), NoSeries
+
+
+	If NoSeries Then
+		If IsViewError Then 
+			MsgBox "В документе не указаны серии для возврата", vbCritical, "Ошибка !"
+		End If
+	End If 
+
+	Op.Done = Not Noseries
+	ManualCharge = Op.Done
+
+End Function
+'---
+'
+'---
+Function CheckSeriesRow(Tr, ByRef NoSeries)
+	Dim Qty, Sum, CurrQty
+
+	NoSeries = (Tr.seriesID = 0)
+
+	If Not NoSeries Then
+		GetSeriesQtySum Tr.SeriesID, Tr.AccCrID, Tr.AgFromID, Qty, Sum
+		If Qty > 0 Then
+			CurrQty = Abs(Tr.Qty)
+			Tr.Qty = -CurrQty
+
+			If CurrQty = Qty Then
+				Tr.Sum = -Sum
+			ElseIf CurrQty < Qty Then
+				Tr.Sum = - Sum / Qty * CurrQty
+			End If
+		End If
+
+	End If
+
+	CheckSeriesRow = Not NoSeries
+End Function
+'---
+'
+'---
+Sub GetSeriesQtySum(SeriesID, AccID, AgID, ByRef Qty, ByRef Sum)
+Dim QD, RS
+
+	Set QD = WorkArea.DAOdataBase.CreateQueryDef("")
+	
+	QD.SQL =	"PARAMETERS SeriesID Long, AccID Long, AgID Long, MC Long ;" &_
+			"Select first(doc_id),	sum(j_qty), sum(j_sum) from 	journal " &_
+			"where 	acc_db = [AccID]	And j_ag1 = [AgID]	And mc_id = [MC] And ser_id = [SeriesID] " &_
+			"group by	j_date, doc_id " &_
+			"order by j_date"
+	
+	QD.Parameters(0).Value = SeriesID
+	QD.Parameters(1).Value = AccID
+	QD.Parameters(2).Value = AgID
+	QD.Parameters(3).Value = Workarea.MyCompany.ID
+	
+	Set RS = QD.OpenRecordSet
+
+	If Rs.eof Then
+		Qty = 0
+		Sum = 0
+	Else
+		Qty = Rs.Fields(1).Value
+		Sum = Rs.Fields(2).Value
+	End If
+End Sub
+
